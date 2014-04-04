@@ -21,7 +21,9 @@ import u12
 from multiprocessing import Process, Pipe
 from dateutil import parser
 
-jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
+if __name__ == '__main__':
+	jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
+
 CO2channel = 0		# U12 ADC channel for CO2 sensor input
 CO2mult = 400		# 400 ppm / volt
 O3channel = 1		# U12 ADC channel for O3 sensor input
@@ -45,13 +47,14 @@ def makeDir(path): # Makes directory at path if necessary
 def fumigate():
 	while len(chamberDict) > 0:	# If no chambers, do nothing
 		for chamber in chamberDict.values():	# Loop through all chambers
-			jack.eDigitalOut(sampleChannel, chamber.channel)	# Sample from current chamber
+			digOut(jack, sampleChannel, chamber.channel)	# Sample from current chamber
 			# print('Purging for %d seconds...' % purgeTime)	# debugging
 			time.sleep(purgeTime)	# Purge sample lines
 			# print('Sampling for %d seconds...' % sampleTime)	#debugging
 			concentrations = sampleGases()	# Get gas concentrations from IRGAs	
 			chamber.updateCO2PID(concentrations['CO2conc'])	# Update the CO2 PID algorithm
 			chamber.updateO3PID(concentrations['O3conc'])	# Update the O3 PID algorithm
+			chamber.printCO2()	# Print CO2 for debugging
 			chamber.parentPipe.send(chamber.CO2out)	# Send new CO2 output to valve controller
 			# chamber.outputO3()		# Write new O3 output to device
 			chamber.saveData()		# Save data to .csv file
@@ -62,11 +65,11 @@ def enterChambers():
 	for channel in range (2):
 		print('Chamber %d: enter timepoints and targets' % (channel+1))
 		timepoint = enterTimepoint(len(timepoints))
-			while timepoint is not False:
-				CO2target = enterTarget('CO2')
-				O3target = enterTarget('O3')
-				timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}
-				timepoint = enterTimepoint(len(timepoints))
+		while timepoint is not False:
+			CO2target = enterTarget('CO2')
+			O3target = enterTarget('O3')
+			timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}
+			timepoint = enterTimepoint(len(timepoints))
 
 
 def printError():
@@ -112,9 +115,10 @@ def sampleGases():
 	O3samples = []	# List of O3 samples
 	
 	while(time.time() < endTime):	# Sample every second until stop time is reached
-		voltages = jack.aiSample(2, [CO2channel, O3channel])['voltages']	# Read raw voltages
-		CO2samples.append(voltages[0]*CO2mult)	# Convert to ppm CO2 and add to list
-		O3samples.append(voltages[1]*O3mult)	# Convert to ppb O3 and add to list
+		CO2volt = jack.rawAISample()['Channel%d' % (CO2channel+1)] # Read raw voltages
+		O3volt = jack.rawAISample()['Channel%d' % (O3channel+1)] # Read raw voltages
+		CO2samples.append(CO2volt*CO2mult)	# Convert to ppm CO2 and add to list
+		O3samples.append(O3volt*O3mult)	# Convert to ppb O3 and add to list
 		time.sleep(1)	# Pause for 1 second
 		
 	CO2conc = sum(CO2samples) / len(CO2samples)	# Calculate mean ppm CO2
@@ -133,6 +137,29 @@ def getO3():
 	O3string = input('Enter O3 concentration in ppb: ')	# Prompt user for now
 	O3conc = float(O3string)
 	return O3conc
+
+# Restrict outputs between low and high
+def boundOutput(output,low,high):
+	if output < low:
+		output = low
+	if output > high:
+		output = high
+	return output
+
+# High-level digital output to U12
+def digOut(j, channel, state):
+	oldState = j.rawDIO()
+	IO3toIO0DirectionsAndStates = int(oldState['IO3toIO0States'])
+	if state == 1:
+		mask = (1<<channel)
+		IO3toIO0DirectionsAndStates = mask | IO3toIO0DirectionsAndStates
+	if state == 0:
+		mask = 0xFF^(1<<channel)
+		IO3toIO0DirectionsAndStates = mask & IO3toIO0DirectionsAndStates
+	args = [int(oldState['D15toD8Directions']), int(oldState['D7toD0Directions']), 
+		int(oldState['D15toD8States']), int(oldState['D7toD0States']), 
+		IO3toIO0DirectionsAndStates, True]
+	j.rawDIO(*args)
 
 # A chamber object refers to a growth chamber	
 class chamber:
@@ -171,7 +198,7 @@ class chamber:
 	def updateCO2PID(self, CO2conc):
 		self.CO2conc = CO2conc
 		if self.CO2enable:
-			self.CO2out = self.CO2PID.update(self.CO2conc)
+			self.CO2out = boundOutput(self.CO2PID.update(self.CO2conc),0,1)
 		else:
 			self.CO2out = 0
 		return self.CO2out
@@ -180,13 +207,13 @@ class chamber:
 	def updateO3PID(self, O3conc):
 		self.O3conc = O3conc
 		if self.O3enable:
-			self.O3out = self.O3PID.update(self.O3conc)
+			self.O3out = boundOutput(self.O3PID.update(self.O3conc),0,1)
 		else:
 			self.O3out = 0
 		return self.O3out
 	
 	# Print CO2 output
-	def outputCO2(self):
+	def printCO2(self):
 		print('Chamber %d CO2 concentration: %d CO2 output: %d' % 
 			(self.channel, self.CO2conc, self.CO2out))
 	
@@ -205,17 +232,13 @@ class chamber:
 				timeout = 0	# Reset timeout
 			else:
 				timeout = timeout + 1	# Increment timeout because no input from parent
-			if output < 0:	# Require 0 <= output <= 1
-				output = 0
-			if output > 1:
-				output = 1
 			onTime = output*cycleTime		# Calculate time solenoid is on
 			offTime = (1-output)*cycleTime	# Calculate time solenoid is off
 			if output > 0:	# Only turn on solenoid for nonzero output
-				jack.eDigitalOut(self.channel,1)	# Turn on solenoid
+				digOut(jack,self.channel,1)	# Turn on solenoid
 				time.sleep(onTime)				# Wait
 			if output < 1:	# Only turn off solenoid for output < 1
-				jack.eDigitalOut(self.channel,0)	# Turn off solenoid
+				digOut(jack,self.channel,0)	# Turn off solenoid
 				time.sleep(offTime)				# Wait
 	
 	# Send O3 output to device. This method is unfinished
@@ -244,10 +267,11 @@ class chamber:
 		except IOError:
 			pass
 
-if __name__ == '__main__':			
+if __name__ == '__main__':
 	bilbo = chamber(channel=0, CO2target=600, O3target=0)	# Create chamber for debugging
-	frodo = chamber(channel=1, CO2target=600, O3target=100)	# Create chamber for debugging
+	frodo = chamber(channel=1, CO2target=0, O3target=100)	# Create chamber for debugging
 	chamberDict = {0:bilbo, 1:frodo}	# List chamber objects for debugging
 	bilbo.launchCO2()
 	frodo.launchCO2()
 	fumigate()
+
