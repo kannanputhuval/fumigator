@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 from multiprocessing import Process, Pipe
 import time
 import u12
@@ -23,3 +24,22 @@ if __name__ == '__main__':
 		period = input('Enter period in seconds: ')
 		parentPipe.send(period)
 		time.sleep(4)
+=======
+import u12
+
+j = u12.U12()
+
+def digOut(j, channel, state):
+	oldState = j.rawDIO()
+	IO3toIO0DirectionsAndStates = int(oldState['IO3toIO0States'])
+	if state == 1:
+		mask = (1<<channel)
+		IO3toIO0DirectionsAndStates = mask | IO3toIO0DirectionsAndStates
+	if state == 0:
+		mask = 0xFF^(1<<channel)
+		IO3toIO0DirectionsAndStates = mask & IO3toIO0DirectionsAndStates
+	args = [int(oldState['D15toD8Directions']), int(oldState['D7toD0Directions']), 
+		int(oldState['D15toD8States']), int(oldState['D7toD0States']), 
+		IO3toIO0DirectionsAndStates, True]
+	j.rawDIO(*args)
+>>>>>>> b9103cbd7b8a472b1cc98c2b293f238c649c927a

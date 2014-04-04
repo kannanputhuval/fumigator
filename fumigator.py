@@ -21,7 +21,9 @@ import u12
 from multiprocessing import Process, Pipe
 from dateutil import parser
 
-jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
+if __name__ == '__main__':
+	jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
+
 CO2channel = 0		# U12 ADC channel for CO2 sensor input
 CO2mult = 400		# 400 ppm / volt
 O3channel = 1		# U12 ADC channel for O3 sensor input
@@ -62,11 +64,11 @@ def enterChambers():
 	for channel in range (2):
 		print('Chamber %d: enter timepoints and targets' % (channel+1))
 		timepoint = enterTimepoint(len(timepoints))
-			while timepoint is not False:
-				CO2target = enterTarget('CO2')
-				O3target = enterTarget('O3')
-				timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}
-				timepoint = enterTimepoint(len(timepoints))
+		while timepoint is not False:
+			CO2target = enterTarget('CO2')
+			O3target = enterTarget('O3')
+			timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}
+			timepoint = enterTimepoint(len(timepoints))
 
 
 def printError():
@@ -134,6 +136,29 @@ def getO3():
 	O3conc = float(O3string)
 	return O3conc
 
+# Restrict outputs between low and high
+def boundOutput(output,low,high):
+	if output < low:
+		output = low
+	if output > high:
+		output = high
+	return output
+
+# High-level digital output to U12
+def digOut(j, channel, state):
+	oldState = j.rawDIO()
+	IO3toIO0DirectionsAndStates = int(oldState['IO3toIO0States'])
+	if state == 1:
+		mask = (1<<channel)
+		IO3toIO0DirectionsAndStates = mask | IO3toIO0DirectionsAndStates
+	if state == 0:
+		mask = 0xFF^(1<<channel)
+		IO3toIO0DirectionsAndStates = mask & IO3toIO0DirectionsAndStates
+	args = [int(oldState['D15toD8Directions']), int(oldState['D7toD0Directions']), 
+		int(oldState['D15toD8States']), int(oldState['D7toD0States']), 
+		IO3toIO0DirectionsAndStates, True]
+	j.rawDIO(*args)
+
 # A chamber object refers to a growth chamber	
 class chamber:
 
@@ -171,7 +196,7 @@ class chamber:
 	def updateCO2PID(self, CO2conc):
 		self.CO2conc = CO2conc
 		if self.CO2enable:
-			self.CO2out = self.CO2PID.update(self.CO2conc)
+			self.CO2out = boundOutput(self.CO2PID.update(self.CO2conc),0,1)
 		else:
 			self.CO2out = 0
 		return self.CO2out
@@ -180,13 +205,13 @@ class chamber:
 	def updateO3PID(self, O3conc):
 		self.O3conc = O3conc
 		if self.O3enable:
-			self.O3out = self.O3PID.update(self.O3conc)
+			self.O3out = boundOutput(self.O3PID.update(self.O3conc),0,1)
 		else:
 			self.O3out = 0
 		return self.O3out
 	
 	# Print CO2 output
-	def outputCO2(self):
+	def printCO2(self):
 		print('Chamber %d CO2 concentration: %d CO2 output: %d' % 
 			(self.channel, self.CO2conc, self.CO2out))
 	
@@ -244,10 +269,11 @@ class chamber:
 		except IOError:
 			pass
 
-if __name__ == '__main__':			
+if __name__ == '__main__':
 	bilbo = chamber(channel=0, CO2target=600, O3target=0)	# Create chamber for debugging
-	frodo = chamber(channel=1, CO2target=600, O3target=100)	# Create chamber for debugging
+	frodo = chamber(channel=1, CO2target=0, O3target=100)	# Create chamber for debugging
 	chamberDict = {0:bilbo, 1:frodo}	# List chamber objects for debugging
 	bilbo.launchCO2()
 	frodo.launchCO2()
 	fumigate()
+
