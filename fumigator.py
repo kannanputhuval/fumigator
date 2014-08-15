@@ -4,7 +4,7 @@
 # Updated: 2014-08-11
 # Description: This program measures and controls the concentration of CO2 and O3 in
 #	growth chambers
-
+# Dependencies: labjackpython, dateutil
 # To do:
 #	tune PID
 #	make real-time duty cycle
@@ -297,9 +297,9 @@ class chamber:
 	
 	# Save this chamber's data to .csv file
 	def saveData(self):
-		subDir = 'chamber' + str(self.channel)
+		subDir = 'chamber' + str(self.channel + 1)
 		path = dataDir + '/' + subDir
-		makeDir(path)	# Make directory something like 'C:\Data\chamber0\'
+		makeDir(path)	# Make directory something like 'C:\Data\chamber1\'
 		
 		now = datetime.datetime.now()
 		date = now.date().isoformat()	# Create ISO-formatted date string
