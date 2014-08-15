@@ -1,13 +1,12 @@
-import datetime
+import signal, os
 
-timepoints = {datetime.time(6,0):'6am', datetime.time(18,0):'6pm'}
+def handler(signum, frame):
+	print('Signal handler called with signal', signum)
+	raise IOError("Couldn't open device!")
+	
+signal.signal(signal.SIGALRM, handler)
+signal.alarm(5)
 
-def getTimepoint():
-	times = sorted(timepoints.keys())
-	now = datetime.datetime.now().time()
-	i = 0
-	newTimepoint = times[i]
-	while now > times[i] and i < len(times):
-		newTimepoint = times[i]
-		i += 1
-	return newTimepoint
+time.sleep(10)
+
+signal.alarm(0)

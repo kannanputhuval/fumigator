@@ -1,13 +1,13 @@
 # Fumigation Control
 # Author: Kannan K Puthuval, University of Illinois, kputhuva@illinois.edu
 # Date: 2014-02-21
-# Updated: 2014-03-27
+# Updated: 2014-08-11
 # Description: This program measures and controls the concentration of CO2 and O3 in
 #	growth chambers
 
 # To do:
-#	create monitor
 #	tune PID
+#	make real-time duty cycle
 #	create SPI interface for O3 bulb dimmer
 
 import datetime
@@ -19,15 +19,13 @@ import u12
 from multiprocessing import Process, Pipe
 from dateutil import parser
 
-jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
-
 CO2channel = 0		# U12 AI channel for CO2 sensor input
 CO2mult = 400		# 400 ppm / volt
 O3channel = 1		# U12 AI channel for O3 sensor input
 O3mult = 100		# 100 ppb / volt
 sampleChannel = 3	# U12 IO channel for sample valve
-sampleTime = 20		# Sample for n seconds
-purgeTime = 20		# Purge sample lines for n seconds
+sampleTime = 15		# Sample for n seconds
+purgeTime = 15		# Purge sample lines for n seconds
 cycleTime = 30		# Cycle CO2 solenoid every n seconds
 chamberDict = {}	# Initialize empty dictionary of chambers
 dataDir = 'FumigatorData'	# Directory for storage of .csv files
@@ -49,40 +47,53 @@ def makeDir(path): # Makes directory at path if necessary
 		pass
 
 # Main loop through chambers that reads sensors, updates PID, and logs data		
-def fumigate():
+def fumigate(IOdevice):
 	while len(chamberDict) > 0:	# If no chambers, do nothing
 		for chamber in chamberDict.values():	# Loop through all chambers
 			chamber.getTimepoint()	# Get current timepoint and update targets
-			jack.eDigitalOut(sampleChannel, chamber.channel)	# Sample from current chamber
+			IOdevice.eDigitalOut(sampleChannel, chamber.channel)	# Sample from current chamber
 			# print('Purging for %d seconds...' % purgeTime)	# debugging
 			time.sleep(purgeTime)	# Purge sample lines
 			# print('Sampling for %d seconds...' % sampleTime)	#debugging
-			concentrations = sampleGases()	# Get gas concentrations from IRGAs	
+			concentrations = sampleGases(IOdevice)	# Get gas concentrations from IRGAs	
 			chamber.updateCO2PID(concentrations['CO2conc'])	# Update the CO2 PID algorithm
 			chamber.updateO3PID(concentrations['O3conc'])	# Update the O3 PID algorithm
 			chamber.parentPipe.send(chamber.CO2out)	# Send new CO2 output to valve controller
 			# chamber.outputO3()		# Write new O3 output to device
-			chamber.saveData()		# Save data to .csv file
+			chamber.saveData()		# Save data to .csv 
+			formattedOutput = (chamber.channel+1, chamber.CO2conc, chamber.CO2out*100)
+			print('Chamber %d CO2: %d ppm, output: %d%%' % formattedOutput)	# Print CO2 concentration
 			
-# Prompt user to enter parameters for a growth chamber. This method needs work.
+# Prompt user to enter parameters for a growth chamber.
 def enterChambers():
 	for chamber in chamberDict.values():
+		print('Initializing chamber %d...' % (chamber.channel+1))
+		time.sleep(1)
 		print('Chamber %d: enter timepoints and targets' % (chamber.channel+1))
-		timepoint = enterTimepoint(len(chamber.timepoints))
-		while timepoint is not False:
-			CO2target = enterTarget('CO2')
-			O3target = enterTarget('O3')
-			chamber.timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}
+		time.sleep(0.5)
+		timepoint = False
+		while timepoint is False:	# Prompt for first timepoint, require at least one
 			timepoint = enterTimepoint(len(chamber.timepoints))
+			if timepoint is False:
+				print('Error: You must enter at least one timepoint.')
+				time.sleep(0.5)
+		while timepoint is not False:	# Prompt for timepoints until user types 'exit'
+			CO2target = enterTarget('CO2')
+			# O3target = enterTarget('O3')
+			O3target = 0	# No O3 fumigation yet, so do not prompt
+			chamber.timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}	# Store timepoint
+			timepoint = enterTimepoint(len(chamber.timepoints))	# Prompt for next timepoint
 
 
 def printError():
-	print('Error. Could not understand the input.')
+	print('Error: Could not understand the input.')
 	time.sleep(0.5)
 	
+# Prompt for timepoint and check validity. Return valid timepoint or False to exit.
 def enterTimepoint(numPoints):
 	success = False
 	while success is False:
+		time.sleep(0.5)
 		timeString = raw_input("Enter timepoint #%d ('exit' to finish): " % (numPoints+1))
 		if timeString == 'exit':
 			success = True
@@ -98,6 +109,7 @@ def enterTimepoint(numPoints):
 				success = True
 	return timepoint
 
+# Prompt for target concentration of CO2 or O3 and check validity
 def enterTarget(gas):
 	success = False
 	prompts = {'CO2':'Enter CO2 concentration in ppm: ', 
@@ -112,14 +124,14 @@ def enterTarget(gas):
 	return target
 	
 # Collect 1-second data from IRGAs until sampleTime has elapsed, then return means
-def sampleGases():
+def sampleGases(IOdevice):
 
 	endTime = time.time() + sampleTime	# Set stop time for sampling loop 
 	CO2samples = []	# List of CO2 samples
 	O3samples = []	# List of O3 samples
 	
 	while(time.time() < endTime):	# Sample every second until stop time is reached
-		voltages = jack.aiSample(2, [CO2channel, O3channel])['voltages']	# Read raw voltages
+		voltages = IOdevice.aiSample(2, [CO2channel, O3channel])['voltages']	# Read raw voltages
 		CO2samples.append(voltages[0]*CO2mult)	# Convert to ppm CO2 and add to list
 		O3samples.append(voltages[1]*O3mult)	# Convert to ppb O3 and add to list
 		time.sleep(1)	# Pause for 1 second
@@ -148,6 +160,23 @@ def boundOutput(output,low,high):
 	if output > high:
 		output = high
 	return output
+	
+# Check for connection to LabJack U12
+def IOcheck(IOdevice):
+	retry = True
+	while retry is True:
+		try:
+			IOdevice.eAnalogIn(0)	# Test an analog input
+			retry = False
+		except:
+			retryString = str(raw_input('Error: No IO device detected. Retry? (y): '))
+			if retryString == 'y' or retryString == 'Y':
+				retry = True
+			else:
+				retry = False
+				print('No IO device. Exiting...')
+				time.sleep(3)
+				exit()
 
 # High-level digital output to U12
 def digOut(j, channel, state):
@@ -168,7 +197,8 @@ def digOut(j, channel, state):
 class chamber:
 
 	# Initialize a chamber object
-	def __init__(self, channel=0):
+	def __init__(self, IOdevice, channel=0):
+		self.IOdevice = IOdevice
 		self.setChannel(channel)
 		self.CO2PID = PID(*CO2PIDconst)
 		self.O3PID = PID(*O3PIDconst)
@@ -255,10 +285,10 @@ class chamber:
 			onTime = output*cycleTime		# Calculate time solenoid is on
 			offTime = (1-output)*cycleTime	# Calculate time solenoid is off
 			if output > 0:	# Only turn on solenoid for nonzero output
-				jack.eDigitalOut(self.channel,1)	# Turn on solenoid
+				self.IOdevice.eDigitalOut(self.channel,1)	# Turn on solenoid
 				time.sleep(onTime)				# Wait
 			if output < 1:	# Only turn off solenoid for output < 1
-				jack.eDigitalOut(self.channel,0)	# Turn off solenoid
+				self.IOdevice.eDigitalOut(self.channel,0)	# Turn off solenoid
 				time.sleep(offTime)				# Wait
 	
 	# Send O3 output to device. This method is unfinished
@@ -285,14 +315,19 @@ class chamber:
 			writer.writerow(line) # Write one line of data
 			file.close()
 		except IOError:
-			pass
+			print('Error: File is in use and locked by another program. Cannot write data.')
 
 if __name__ == '__main__':
-	bilbo = chamber(channel=0)	# Create chamber for debugging
-	frodo = chamber(channel=1)	# Create chamber for debugging
+	print('Launching fumigator...')
+	time.sleep(1)
+	jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
+	IOcheck(jack)	# Check for connection to jack
+	bilbo = chamber(jack, channel=0)	# Create chamber for debugging
+	frodo = chamber(jack, channel=1)	# Create chamber for debugging
 	chamberDict = {0:bilbo, 1:frodo}	# List chamber objects for debugging
-	enterChambers()
-	bilbo.launchCO2()
+	enterChambers()	# Prompt user to enter timepoints for each chamber
+	print('Launching fumigation...')
+	bilbo.launchCO2()	# Launch process to control CO2 delivery valve
 	frodo.launchCO2()
-	fumigate()
+	fumigate(jack)	# Launch main fumigation loop using jack
 
