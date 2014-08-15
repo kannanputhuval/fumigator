@@ -297,8 +297,9 @@ class chamber:
 	
 	# Save this chamber's data to .csv file
 	def saveData(self):
+		homeDir = os.path.expanduser('~')
 		subDir = 'chamber' + str(self.channel + 1)
-		path = dataDir + '/' + subDir
+		path = homeDir + '/' + dataDir + '/' + subDir
 		makeDir(path)	# Make directory something like 'C:\Data\chamber1\'
 		
 		now = datetime.datetime.now()
