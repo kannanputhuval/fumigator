@@ -23,11 +23,11 @@ CO2channel = 0		# U12 AI channel for CO2 sensor input
 CO2mult = 400		# 400 ppm / volt
 O3channel = 1		# U12 AI channel for O3 sensor input
 O3mult = 100		# 100 ppb / volt
-sampleChannel = 3	# U12 IO channel for sample valve
+sampleChannel = 2 	# U12 DIO channel for sample valve
 sampleTime = 15		# Sample for n seconds
 purgeTime = 15		# Purge sample lines for n seconds
 cycleTime = 30		# Cycle CO2 solenoid every n seconds
-chamberDict = {}	# Initialize empty dictionary of chambers
+chamberDict = {}		# Initialize empty dictionary of chambers
 dataDir = 'FumigatorData'	# Directory for storage of .csv files
 
 # PID constants
@@ -51,7 +51,7 @@ def fumigate(IOdevice):
 	while len(chamberDict) > 0:	# If no chambers, do nothing
 		for chamber in chamberDict.values():	# Loop through all chambers
 			chamber.getTimepoint()	# Get current timepoint and update targets
-			IOdevice.eDigitalOut(sampleChannel, chamber.channel)	# Sample from current chamber
+			IOdevice.eDigitalOut(sampleChannel, chamber.channel, writeD=True)	# Sample from current chamber
 			# print('Purging for %d seconds...' % purgeTime)	# debugging
 			time.sleep(purgeTime)	# Purge sample lines
 			# print('Sampling for %d seconds...' % sampleTime)	#debugging
@@ -285,10 +285,10 @@ class chamber:
 			onTime = output*cycleTime		# Calculate time solenoid is on
 			offTime = (1-output)*cycleTime	# Calculate time solenoid is off
 			if output > 0:	# Only turn on solenoid for nonzero output
-				self.IOdevice.eDigitalOut(self.channel,1)	# Turn on solenoid
+				self.IOdevice.eDigitalOut(self.channel,1,writeD=True)	# Turn on solenoid
 				time.sleep(onTime)				# Wait
 			if output < 1:	# Only turn off solenoid for output < 1
-				self.IOdevice.eDigitalOut(self.channel,0)	# Turn off solenoid
+				self.IOdevice.eDigitalOut(self.channel,0,writeD=True)	# Turn off solenoid
 				time.sleep(offTime)				# Wait
 	
 	# Send O3 output to device. This method is unfinished
