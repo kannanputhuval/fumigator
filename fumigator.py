@@ -1,14 +1,15 @@
 # Fumigation Control
 # Author: Kannan K Puthuval, University of Illinois, kputhuva@illinois.edu
 # Date: 2014-02-21
-# Updated: 2014-08-11
+# Updated: 2014-08-30
 # Description: This program measures and controls the concentration of CO2 and O3 in
 #	growth chambers
 # Dependencies: labjackpython, dateutil
+
 # To do:
 #	tune PID
 #	make real-time duty cycle
-#	create SPI interface for O3 bulb dimmer
+#	finish outputO3(), create SPI interface for O3 bulb dimmer
 
 import datetime
 import csv
@@ -23,7 +24,7 @@ CO2channel = 0		# U12 AI channel for CO2 sensor input
 CO2mult = 400		# 400 ppm / volt
 O3channel = 1		# U12 AI channel for O3 sensor input
 O3mult = 100		# 100 ppb / volt
-sampleChannel = 2 	# U12 DIO channel for sample valve
+sampleChannel = 8 	# U12 DIO channel for sample valve
 sampleTime = 15		# Sample for n seconds
 purgeTime = 15		# Purge sample lines for n seconds
 cycleTime = 30		# Cycle CO2 solenoid every n seconds
@@ -61,8 +62,8 @@ def fumigate(IOdevice):
 			chamber.parentPipe.send(chamber.CO2out)	# Send new CO2 output to valve controller
 			# chamber.outputO3()		# Write new O3 output to device
 			chamber.saveData()		# Save data to .csv 
-			formattedOutput = (chamber.channel+1, chamber.CO2conc, chamber.CO2out*100)
-			print('Chamber %d CO2: %d ppm, output: %d%%' % formattedOutput)	# Print CO2 concentration
+			formattedOutput = (chamber.channel+1, chamber.CO2conc, chamber.CO2target, chamber.CO2out*100)
+			print('Chamber %d CO2: %d ppm, target: %d ppm, output: %d%%' % formattedOutput)	# Print CO2 concentration
 			
 # Prompt user to enter parameters for a growth chamber.
 def enterChambers():
@@ -73,16 +74,16 @@ def enterChambers():
 		time.sleep(0.5)
 		timepoint = False
 		while timepoint is False:	# Prompt for first timepoint, require at least one
-			timepoint = enterTimepoint(len(chamber.timepoints))
+			timepoint = enterTimepoint(chamber.channel,len(chamber.timepoints))
 			if timepoint is False:
 				print('Error: You must enter at least one timepoint.')
 				time.sleep(0.5)
 		while timepoint is not False:	# Prompt for timepoints until user types 'exit'
-			CO2target = enterTarget('CO2')
+			CO2target = enterTarget(timepoint,'CO2')
 			# O3target = enterTarget('O3')
 			O3target = 0	# No O3 fumigation yet, so do not prompt
 			chamber.timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}	# Store timepoint
-			timepoint = enterTimepoint(len(chamber.timepoints))	# Prompt for next timepoint
+			timepoint = enterTimepoint(chamber.channel,len(chamber.timepoints))	# Prompt for next timepoint
 
 
 def printError():
@@ -90,37 +91,37 @@ def printError():
 	time.sleep(0.5)
 	
 # Prompt for timepoint and check validity. Return valid timepoint or False to exit.
-def enterTimepoint(numPoints):
-	success = False
-	while success is False:
+def enterTimepoint(channel,numPoints):
+	success = False	# True when valid timepoint is entered
+	while success is False:	# Loop until valid timepoint or exit command is entered
 		time.sleep(0.5)
-		timeString = raw_input("Enter timepoint #%d ('exit' to finish): " % (numPoints+1))
-		if timeString == 'exit':
+		timeString = raw_input("Enter chamber %d timepoint %d ('exit' to finish): " % (channel+1,numPoints+1))
+		if timeString == 'exit':	# Allow user to exit loop
 			success = True
 			timepoint = False
 		else:
-			try:
+			try:	# Attempt to parse user input
 				timepoint = parser.parse(timeString).time()
-			except ValueError:
+			except ValueError:	# Invalid input, try again
 				printError()
-			except TypeError:
+			except TypeError:	# Invalid input, try again
 				printError()
 			else:
-				success = True
+				success = True	# Valid input, return timepoint
 	return timepoint
 
 # Prompt for target concentration of CO2 or O3 and check validity
-def enterTarget(gas):
-	success = False
-	prompts = {'CO2':'Enter CO2 concentration in ppm: ', 
-		'O3':'Enter O3 concentration in ppb: '}
-	while success is False:
-		try:
-			target = float(raw_input(prompts[gas]))
-		except ValueError:
+def enterTarget(timepoint,gas):
+	success = False	# True when valid target is entered
+	units = {'CO2':'ppm','O3':'ppb'}
+	prompt = 'Enter target %s concentration at %s in %s: ' % (gas,str(timepoint),units[gas])
+	while success is False:	# Loop until valid target is entered
+		try:	# Attempt to parse user input
+			target = float(raw_input(prompt))
+		except ValueError:	# Invalid input, try again
 			printError()
 		else:
-			success = True
+			success = True	# Valid input, return target
 	return target
 	
 # Collect 1-second data from IRGAs until sampleTime has elapsed, then return means
@@ -141,17 +142,6 @@ def sampleGases(IOdevice):
 	
 	return {'CO2conc':CO2conc, 'O3conc':O3conc}	# Return gas concentration values			
 			
-# Read CO2 concentration from sensor			
-def getCO2():
-	CO2string = input('Enter CO2 concentration in ppm: ')	# Prompt user for now
-	CO2conc = float(CO2string)
-	return CO2conc
-
-# Read O3 concentration from sensor	
-def getO3():
-	O3string = input('Enter O3 concentration in ppb: ')	# Prompt user for now
-	O3conc = float(O3string)
-	return O3conc
 
 # Restrict outputs between low and high
 def boundOutput(output,low,high):
@@ -163,12 +153,12 @@ def boundOutput(output,low,high):
 	
 # Check for connection to LabJack U12
 def IOcheck(IOdevice):
-	retry = True
+	retry = True	# True if user wants to retry
 	while retry is True:
 		try:
 			IOdevice.eAnalogIn(0)	# Test an analog input
-			retry = False
-		except:
+			retry = False	# Test succeeded, move on without retry
+		except:	# Test failed
 			retryString = str(raw_input('Error: No IO device detected. Retry? (y): '))
 			if retryString == 'y' or retryString == 'Y':
 				retry = True
@@ -177,21 +167,6 @@ def IOcheck(IOdevice):
 				print('No IO device. Exiting...')
 				time.sleep(3)
 				exit()
-
-# High-level digital output to U12
-def digOut(j, channel, state):
-	oldState = j.rawDIO()
-	IO3toIO0DirectionsAndStates = int(oldState['IO3toIO0States'])
-	if state == 1:
-		mask = (1<<channel)
-		IO3toIO0DirectionsAndStates = mask | IO3toIO0DirectionsAndStates
-	if state == 0:
-		mask = 0xFF^(1<<channel)
-		IO3toIO0DirectionsAndStates = mask & IO3toIO0DirectionsAndStates
-	args = [int(oldState['D15toD8Directions']), int(oldState['D7toD0Directions']), 
-		int(oldState['D15toD8States']), int(oldState['D7toD0States']), 
-		IO3toIO0DirectionsAndStates, True]
-	j.rawDIO(*args)
 
 # A chamber object refers to a growth chamber	
 class chamber:
@@ -323,6 +298,7 @@ if __name__ == '__main__':
 	time.sleep(1)
 	jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
 	IOcheck(jack)	# Check for connection to jack
+	jack.watchdog(1,60,[1,1,0],[0,0,0])	# Set 60 second watchdog for jack
 	bilbo = chamber(jack, channel=0)	# Create chamber for debugging
 	frodo = chamber(jack, channel=1)	# Create chamber for debugging
 	chamberDict = {0:bilbo, 1:frodo}	# List chamber objects for debugging
