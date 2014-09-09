@@ -53,10 +53,8 @@ def fumigate(IOdevice):
 		for chamber in chamberDict.values():	# Loop through all chambers
 			chamber.getTimepoint()	# Get current timepoint and update targets
 			IOdevice.eDigitalOut(sampleChannel, chamber.channel, writeD=True)	# Sample from current chamber
-			# print('Purging for %d seconds...' % purgeTime)	# debugging
 			time.sleep(purgeTime)	# Purge sample lines
-			# print('Sampling for %d seconds...' % sampleTime)	#debugging
-			concentrations = sampleGases(IOdevice)	# Get gas concentrations from IRGAs	
+			concentrations = sampleGases(IOdevice,sampleTime,CO2channel,O3channel)	# Get gas concentrations from IRGAs	
 			chamber.updateCO2PID(concentrations['CO2conc'])	# Update the CO2 PID algorithm
 			chamber.updateO3PID(concentrations['O3conc'])	# Update the O3 PID algorithm
 			chamber.parentPipe.send(chamber.CO2out)	# Send new CO2 output to valve controller
@@ -125,7 +123,7 @@ def enterTarget(timepoint,gas):
 	return target
 	
 # Collect 1-second data from IRGAs until sampleTime has elapsed, then return means
-def sampleGases(IOdevice):
+def sampleGases(IOdevice,sampleTime,CO2channel,O3channel):
 
 	endTime = time.time() + sampleTime	# Set stop time for sampling loop 
 	CO2samples = []	# List of CO2 samples
