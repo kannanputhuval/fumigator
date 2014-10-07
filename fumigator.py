@@ -1,15 +1,12 @@
 # Fumigation Control
 # Author: Kannan K Puthuval, University of Illinois, kputhuva@illinois.edu
-# Date: 2014-02-21
-# Updated: 2014-08-30
+# Updated: 2014-10-04
 # Description: This program measures and controls the concentration of CO2 and O3 in
 #	growth chambers
-# Dependencies: labjackpython, dateutil
+# Dependencies: labjackpython, dateutil, xml, PID, multiprocessing
 
 # To do:
-#	tune PID
-#	make real-time duty cycle
-#	finish outputO3(), create SPI interface for O3 bulb dimmer
+#	finish outputO3(), create interface for O3 bulb dimmer
 
 import datetime
 import csv
@@ -19,50 +16,64 @@ import time
 import u12
 from multiprocessing import Process, Pipe
 from dateutil import parser
+import xml.etree.ElementTree as ET
 
 CO2channel = 0		# U12 AI channel for CO2 sensor input
 CO2mult = 400		# 400 ppm / volt
 O3channel = 1		# U12 AI channel for O3 sensor input
 O3mult = 100		# 100 ppb / volt
 sampleChannel = 8 	# U12 DIO channel for sample valve
-sampleTime = 15		# Sample for n seconds
-purgeTime = 15		# Purge sample lines for n seconds
-cycleTime = 30		# Cycle CO2 solenoid every n seconds
-chamberDict = {}		# Initialize empty dictionary of chambers
+sampleTime = 5		# Sample for n seconds
+purgeTime = 10		# Purge sample lines for n seconds
+cycleTime = 5		# Cycle CO2 solenoid every n seconds
 dataDir = 'FumigatorData'	# Directory for storage of .csv files
+configFile = 'config.xml'	# Configuration file
+IOdevice = u12.U12()	# Initialize first LabJack U12 found
+chamberDict = {}	# Initialize empty chamber dictionary
 
-# PID constants
-CO2kP = 0.0001
-CO2kI = 0
-CO2kD = 0
-O3kP = 0.0001
-O3kI = 0
-O3kD = 0
-CO2PIDconst = [CO2kP,CO2kI,CO2kD]
-O3PIDconst = [O3kP,O3kI,O3kD]
+def main():
+	# print('Launching fumigator...')
+	# time.sleep(1)
+	IOcheck()	# Check for connection to IOdevice
+	IOdevice.watchdog(1,60,[1,1,0],[0,0,0])	# Set 60 second watchdog for IOdevice
+	readChambers()
+	# bilbo = chamber(jack, channel=0)	# Create chamber for debugging
+	# frodo = chamber(jack, channel=1)	# Create chamber for debugging
+	# chamberDict = {0:bilbo, 1:frodo}	# List chamber objects for debugging
+	# enterChambers()	# Prompt user to enter timepoints for each chamber
+	print('Launching fumigation...')
+	# bilbo.launchCO2()	# Launch process to control CO2 delivery valve
+	# frodo.launchCO2()
+	fumigate()	# Launch main fumigation loop
+
+# Main loop through chambers that reads sensors, updates PID, and logs data		
+def fumigate():
+	while len(chamberDict) > 0:	# If no chambers, do nothing
+		for chamber in chamberDict.values():	# Loop through all chambers
+			chamber.getTimepoint()	# Get current timepoint and update targets
+			IOdevice.eDigitalOut(
+				sampleChannel, chamber.channel, writeD=True
+				)	# Sample from current chamber
+			time.sleep(purgeTime)	# Purge sample lines
+			concentrations = sampleGases(sampleTime,CO2channel,O3channel)# Get concentrations from IRGAs	
+			chamber.updateCO2PID(concentrations['CO2conc'])	# Update the CO2 PID algorithm
+			chamber.updateO3PID(concentrations['O3conc'])	# Update the O3 PID algorithm
+			chamber.parentPipe.send(chamber.CO2out)	# Send new CO2 output to valve controller
+			# chamber.outputO3()		# Write new O3 output to device
+			chamber.saveData()		# Save data to .csv 
+			formattedOutput = (
+				chamber.channel+1, chamber.CO2conc, chamber.CO2target, chamber.CO2out*100
+				)
+			print(
+				'Chamber %d CO2: %d ppm, target: %d ppm, output: %d%%' % formattedOutput
+				)	# Print CO2 concentration
 
 def makeDir(path): # Makes directory at path if necessary
 	try:
 		os.makedirs(path)
 	except OSError: # Directory already exists, so do nothing
 		pass
-
-# Main loop through chambers that reads sensors, updates PID, and logs data		
-def fumigate(IOdevice):
-	while len(chamberDict) > 0:	# If no chambers, do nothing
-		for chamber in chamberDict.values():	# Loop through all chambers
-			chamber.getTimepoint()	# Get current timepoint and update targets
-			IOdevice.eDigitalOut(sampleChannel, chamber.channel, writeD=True)	# Sample from current chamber
-			time.sleep(purgeTime)	# Purge sample lines
-			concentrations = sampleGases(IOdevice,sampleTime,CO2channel,O3channel)	# Get gas concentrations from IRGAs	
-			chamber.updateCO2PID(concentrations['CO2conc'])	# Update the CO2 PID algorithm
-			chamber.updateO3PID(concentrations['O3conc'])	# Update the O3 PID algorithm
-			chamber.parentPipe.send(chamber.CO2out)	# Send new CO2 output to valve controller
-			# chamber.outputO3()		# Write new O3 output to device
-			chamber.saveData()		# Save data to .csv 
-			formattedOutput = (chamber.channel+1, chamber.CO2conc, chamber.CO2target, chamber.CO2out*100)
-			print('Chamber %d CO2: %d ppm, target: %d ppm, output: %d%%' % formattedOutput)	# Print CO2 concentration
-			
+				
 # Prompt user to enter parameters for a growth chamber.
 def enterChambers():
 	for chamber in chamberDict.values():
@@ -80,8 +91,11 @@ def enterChambers():
 			CO2target = enterTarget(timepoint,'CO2')
 			# O3target = enterTarget('O3')
 			O3target = 0	# No O3 fumigation yet, so do not prompt
-			chamber.timepoints[timepoint] = {'CO2':CO2target, 'O3':O3target}	# Store timepoint
-			timepoint = enterTimepoint(chamber.channel,len(chamber.timepoints))	# Prompt for next timepoint
+			chamber.timepoints[timepoint]['CO2'] = CO2target
+			chamber.timepoints[timepoint]['O3'] = O3target
+			timepoint = enterTimepoint(
+				chamber.channel,len(chamber.timepoints)
+				)	# Prompt for next timepoint
 
 
 def printError():
@@ -93,7 +107,8 @@ def enterTimepoint(channel,numPoints):
 	success = False	# True when valid timepoint is entered
 	while success is False:	# Loop until valid timepoint or exit command is entered
 		time.sleep(0.5)
-		timeString = raw_input("Enter chamber %d timepoint %d ('exit' to finish): " % (channel+1,numPoints+1))
+		timeString = raw_input(
+			"Enter chamber %d timepoint %d ('exit' to finish): " % (channel+1,numPoints+1))
 		if timeString == 'exit':	# Allow user to exit loop
 			success = True
 			timepoint = False
@@ -122,10 +137,11 @@ def enterTarget(timepoint,gas):
 			success = True	# Valid input, return target
 	return target
 	
-# Collect 1-second data from IRGAs until sampleTime has elapsed, then return means
-def sampleGases(IOdevice,sampleTime,CO2channel,O3channel):
+# Collect 1-second data from IRGAs until sampleTime has elapsed,
+# then return means
+def sampleGases(sampleTime,CO2channel,O3channel):
 
-	endTime = time.time() + sampleTime	# Set stop time for sampling loop 
+	endTime = time.time() + sampleTime	# Set stop time for sample loop 
 	CO2samples = []	# List of CO2 samples
 	O3samples = []	# List of O3 samples
 	
@@ -140,17 +156,9 @@ def sampleGases(IOdevice,sampleTime,CO2channel,O3channel):
 	
 	return {'CO2conc':CO2conc, 'O3conc':O3conc}	# Return gas concentration values			
 			
-
-# Restrict outputs between low and high
-def boundOutput(output,low,high):
-	if output < low:
-		output = low
-	if output > high:
-		output = high
-	return output
-	
+			
 # Check for connection to LabJack U12
-def IOcheck(IOdevice):
+def IOcheck():
 	retry = True	# True if user wants to retry
 	while retry is True:
 		try:
@@ -165,59 +173,75 @@ def IOcheck(IOdevice):
 				print('No IO device. Exiting...')
 				time.sleep(3)
 				exit()
-
+				
+# Read chambers from the associated config file
+def readChambers():
+	tree = ET.parse(configFile)
+	root = tree.getroot()
+	chambers = root.findall('chamber')
+	for chamberElement in chambers:
+		channel = int(chamberElement.find('channel').text)
+		chamberDict[channel] = chamber(configFile, channel)
+		
 # A chamber object refers to a growth chamber	
 class chamber:
 
 	# Initialize a chamber object
-	def __init__(self, IOdevice, channel=0):
+	def __init__(self, configFile, channel=0):
+		self.configFile = configFile
 		self.IOdevice = IOdevice
-		self.setChannel(channel)
-		self.CO2PID = PID(*CO2PIDconst)
-		self.O3PID = PID(*O3PIDconst)
+		self.channel = channel
+		self.readParams()
+		self.readTimepoints()
+		self.CO2PID = PID()
+		self.O3PID = PID()
 		self.CO2conc = 0
 		self.O3conc = 0
-		self.setCO2target(0)
-		self.setO3target(0)
 		self.CO2out = 0
 		self.O3out = 0
 		self.CO2enable = True
 		self.O3enable = True
 		self.parentPipe, self.childPipe = Pipe()
-		self.timepoints = {}
 		
 	# Get the current timepoint and set targets
 	def getTimepoint(self):
-		times = sorted(self.timepoints.keys())
-		now = datetime.datetime.now().time()
-		i = 0
-		newTimepoint = times[i]
-		while i < len(times) and now > times[i]:
-			newTimepoint = times[i]
-			i += 1
-		self.setCO2target(self.timepoints[newTimepoint]['CO2'])
-		self.setO3target(self.timepoints[newTimepoint]['O3'])
+		for type in self.timepoints.keys():
+			times = sorted(self.timepoints[type].keys())
+			now = datetime.datetime.now().time()
+			i = 0
+			newTime = times[i]
+			while i < len(times) and now > times[i]:
+				newTime = times[i]
+				i += 1
+		return newTime
 	
 	# Set private channel and update chamberDict
-	def setChannel(self, newChannel):
-		self.channel = newChannel
-		chamberDict[newChannel] = self
+	# def setChannel(self, newChannel):
+		# self.channel = newChannel
+		# chamberDict[newChannel] = self
 	
-	# Set private target and PID target
-	def setCO2target(self, newTarget):
-		self.CO2target = newTarget
-		self.CO2PID.setPoint(newTarget)
+	# # Set private target and PID target
+	# def setCO2target(self, newTarget):
+		# self.CO2target = newTarget
+		# self.CO2PID.setTarget(newTarget)
 		
-	# Set private target and PID target	
-	def setO3target(self, newTarget):
-		self.O3target = newTarget
-		self.O3PID.setPoint(newTarget)
+	# # Set private target and PID target	
+	# def setO3target(self, newTarget):
+		# self.O3target = newTarget
+		# self.O3PID.setTarget(newTarget)
 
 	# Update PID algorithm, return CO2 output
 	def updateCO2PID(self, CO2conc):
 		self.CO2conc = CO2conc
 		if self.CO2enable:
-			self.CO2out = boundOutput(self.CO2PID.update(self.CO2conc),0,1)
+			self.readTimepoints()
+			self.readParams()
+			self.CO2target = self.timepoints['CO2'][self.getTimepoint()]
+			self.CO2PID.setParams(
+				self.CO2target, self.params['CO2']['kP'], self.params['CO2']['kI'],
+				self.params['CO2']['kD'], self.params['CO2']['outMin'], self.params['CO2']['outMax']
+				)
+			self.CO2out = self.CO2PID.update(self.CO2conc)
 		else:
 			self.CO2out = 0
 		return self.CO2out
@@ -226,7 +250,14 @@ class chamber:
 	def updateO3PID(self, O3conc):
 		self.O3conc = O3conc
 		if self.O3enable:
-			self.O3out = boundOutput(self.O3PID.update(self.O3conc),0,1)
+			self.readTimepoints()
+			self.readParams()
+			self.O3target = self.timepoints['O3'][self.getTimepoint()]
+			self.O3PID.setParams(
+				self.O3target, self.params['O3']['kP'], self.params['O3']['kI'],
+				self.params['O3']['kD'],self.params['O3']['outMin'], self.params['O3']['outMax']
+				)
+			self.O3out = self.O3PID.update(self.O3conc)
 		else:
 			self.O3out = 0
 		return self.O3out
@@ -283,26 +314,53 @@ class chamber:
 		
 		try:
 			file = open(path + '/' + filename, 'ab') # Open or create today's file as append binary
-			line = [date,time,self.channel+1,self.CO2conc,self.CO2target,self.CO2out,
-				self.O3conc,self.O3target,self.O3out]
+			line = [
+				date,time,self.channel+1,self.CO2conc,self.CO2target,self.CO2out,self.O3conc,
+				self.O3target,self.O3out
+				]
 			writer = csv.writer(file)	# Create writer object
 			writer.writerow(line) # Write one line of data
 			file.close()
 		except IOError:
 			print('Error: File is in use and locked by another program. Cannot write data.')
+	
+	# Read parameters from the associated config file
+	def readParams(self):
+		tree = ET.parse(self.configFile)
+		root = tree.getroot()
+		# Iterate over all chambers
+		for chamber in root.findall('chamber'):
+			# Select chamber with correct channel
+			if int(chamber.find('channel').text) == self.channel:
+				self.params = {}
+				# Iterate over all processes
+				for process in chamber.findall('process'):
+					type = process.find('type').text
+					self.params[type] = {}
+					self.params[type]['kP'] = float(process.find('kP').text)
+					self.params[type]['kI'] = float(process.find('kI').text)
+					self.params[type]['kD'] = float(process.find('kD').text)
+					self.params[type]['outMin'] = float(process.find('outMin').text)
+					self.params[type]['outMax'] = float(process.find('outMax').text)
+	
+	# Read timepoints from the associated config file
+	def readTimepoints(self):
+		tree = ET.parse(self.configFile)
+		root = tree.getroot()
+		# Iterate over all chambers
+		for chamber in root.findall('chamber'):
+			# Select chamber with correct channel
+			if int(chamber.find('channel').text) == self.channel:
+				self.timepoints = {}
+				# Iterate over all processes
+				for process in chamber.findall('process'):
+					type = process.find('type').text
+					self.timepoints[type] = {}
+					# Iterate over all timepoints
+					for timepoint in process.findall('timepoint'):
+						time = parser.parse(timepoint.find('time').text).time()
+						target = float(timepoint.find('target').text)
+						self.timepoints[type][time] = target
 
 if __name__ == '__main__':
-	print('Launching fumigator...')
-	time.sleep(1)
-	jack = u12.U12()	# Initialize first LabJack U12 found, call him 'jack'
-	IOcheck(jack)	# Check for connection to jack
-	jack.watchdog(1,60,[1,1,0],[0,0,0])	# Set 60 second watchdog for jack
-	bilbo = chamber(jack, channel=0)	# Create chamber for debugging
-	frodo = chamber(jack, channel=1)	# Create chamber for debugging
-	chamberDict = {0:bilbo, 1:frodo}	# List chamber objects for debugging
-	enterChambers()	# Prompt user to enter timepoints for each chamber
-	print('Launching fumigation...')
-	bilbo.launchCO2()	# Launch process to control CO2 delivery valve
-	frodo.launchCO2()
-	fumigate(jack)	# Launch main fumigation loop using jack
-
+	main()
