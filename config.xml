@@ -11,11 +11,11 @@
 			<outMin>0</outMin>
 			<outMax>1</outMax>
 			<timepoint>
-				<time>8am</time>
+				<time>7am</time>
 				<target>1000</target>
 			</timepoint>
 			<timepoint>
-				<time>6pm</time>
+				<time>7pm</time>
 				<target>0</target>
 			</timepoint>
 		</process>	
@@ -26,14 +26,6 @@
 			<kD>-0.0001</kD>
 			<outMin>0</outMin>
 			<outMax>1</outMax>
-			<timepoint>
-				<time>8am</time>
-				<target>75</target>
-			</timepoint>
-			<timepoint>
-				<time>6pm</time>
-				<target>150</target>
-			</timepoint>
 		</process>
 	</chamber>
 	<chamber>
@@ -46,13 +38,13 @@
 			<outMin>0</outMin>
 			<outMax>1</outMax>
 			<timepoint>
-				<time>8am</time>
+				<time>7am</time>
 				<target>0</target>
 			</timepoint>
 			<timepoint>
-				<time>6pm</time>
+				<time>7pm</time>
 				<target>1000</target>
-			</timepoint>
+			</timepoint>			
 		</process>
 		<process>
 			<type>O3</type>
@@ -61,14 +53,6 @@
 			<kD>-0.0001</kD>
 			<outMin>0</outMin>
 			<outMax>1</outMax>
-			<timepoint>
-				<time>8am</time>
-				<target>75</target>
-			</timepoint>
-			<timepoint>
-				<time>6pm</time>
-				<target>150</target>
-			</timepoint>
 		</process>
 	</chamber>
 </data>

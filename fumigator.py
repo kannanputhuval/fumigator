@@ -23,34 +23,25 @@ CO2mult = 400		# 400 ppm / volt
 O3channel = 1		# U12 AI channel for O3 sensor input
 O3mult = 100		# 100 ppb / volt
 sampleChannel = 8 	# U12 DIO channel for sample valve
-sampleTime = 5		# Sample for n seconds
-purgeTime = 10		# Purge sample lines for n seconds
-cycleTime = 5		# Cycle CO2 solenoid every n seconds
+sampleTime = 1		# Sample for n seconds
+purgeTime = 1		# Purge sample lines for n seconds
+cycleTime = 1		# Cycle CO2 solenoid every n seconds
 dataDir = 'FumigatorData'	# Directory for storage of .csv files
 configFile = 'config.xml'	# Configuration file
 IOdevice = u12.U12()	# Initialize first LabJack U12 found
 chamberDict = {}	# Initialize empty chamber dictionary
 
 def main():
-	# print('Launching fumigator...')
-	# time.sleep(1)
 	IOcheck()	# Check for connection to IOdevice
 	IOdevice.watchdog(1,60,[1,1,0],[0,0,0])	# Set 60 second watchdog for IOdevice
 	readChambers()
-	# bilbo = chamber(jack, channel=0)	# Create chamber for debugging
-	# frodo = chamber(jack, channel=1)	# Create chamber for debugging
-	# chamberDict = {0:bilbo, 1:frodo}	# List chamber objects for debugging
-	# enterChambers()	# Prompt user to enter timepoints for each chamber
 	print('Launching fumigation...')
-	# bilbo.launchCO2()	# Launch process to control CO2 delivery valve
-	# frodo.launchCO2()
 	fumigate()	# Launch main fumigation loop
 
-# Main loop through chambers that reads sensors, updates PID, and logs data		
+# Loop through chambers, read sensors, update PID, and log data		
 def fumigate():
 	while len(chamberDict) > 0:	# If no chambers, do nothing
 		for chamber in chamberDict.values():	# Loop through all chambers
-			chamber.getTimepoint()	# Get current timepoint and update targets
 			IOdevice.eDigitalOut(
 				sampleChannel, chamber.channel, writeD=True
 				)	# Sample from current chamber
@@ -74,68 +65,68 @@ def makeDir(path): # Makes directory at path if necessary
 	except OSError: # Directory already exists, so do nothing
 		pass
 				
-# Prompt user to enter parameters for a growth chamber.
-def enterChambers():
-	for chamber in chamberDict.values():
-		print('Initializing chamber %d...' % (chamber.channel+1))
-		time.sleep(1)
-		print('Chamber %d: enter timepoints and targets' % (chamber.channel+1))
-		time.sleep(0.5)
-		timepoint = False
-		while timepoint is False:	# Prompt for first timepoint, require at least one
-			timepoint = enterTimepoint(chamber.channel,len(chamber.timepoints))
-			if timepoint is False:
-				print('Error: You must enter at least one timepoint.')
-				time.sleep(0.5)
-		while timepoint is not False:	# Prompt for timepoints until user types 'exit'
-			CO2target = enterTarget(timepoint,'CO2')
-			# O3target = enterTarget('O3')
-			O3target = 0	# No O3 fumigation yet, so do not prompt
-			chamber.timepoints[timepoint]['CO2'] = CO2target
-			chamber.timepoints[timepoint]['O3'] = O3target
-			timepoint = enterTimepoint(
-				chamber.channel,len(chamber.timepoints)
-				)	# Prompt for next timepoint
+# # Prompt user to enter parameters for a growth chamber.
+# def enterChambers():
+	# for chamber in chamberDict.values():
+		# print('Initializing chamber %d...' % (chamber.channel+1))
+		# time.sleep(1)
+		# print('Chamber %d: enter timepoints and targets' % (chamber.channel+1))
+		# time.sleep(0.5)
+		# timepoint = False
+		# while timepoint is False:	# Prompt for first timepoint, require at least one
+			# timepoint = enterTimepoint(chamber.channel,len(chamber.timepoints))
+			# if timepoint is False:
+				# print('Error: You must enter at least one timepoint.')
+				# time.sleep(0.5)
+		# while timepoint is not False:	# Prompt for timepoints until user types 'exit'
+			# CO2target = enterTarget(timepoint,'CO2')
+			# # O3target = enterTarget('O3')
+			# O3target = 0	# No O3 fumigation yet, so do not prompt
+			# chamber.timepoints[timepoint]['CO2'] = CO2target
+			# chamber.timepoints[timepoint]['O3'] = O3target
+			# timepoint = enterTimepoint(
+				# chamber.channel,len(chamber.timepoints)
+				# )	# Prompt for next timepoint
 
 
-def printError():
-	print('Error: Could not understand the input.')
-	time.sleep(0.5)
+# def printError():
+	# print('Error: Could not understand the input.')
+	# time.sleep(0.5)
 	
-# Prompt for timepoint and check validity. Return valid timepoint or False to exit.
-def enterTimepoint(channel,numPoints):
-	success = False	# True when valid timepoint is entered
-	while success is False:	# Loop until valid timepoint or exit command is entered
-		time.sleep(0.5)
-		timeString = raw_input(
-			"Enter chamber %d timepoint %d ('exit' to finish): " % (channel+1,numPoints+1))
-		if timeString == 'exit':	# Allow user to exit loop
-			success = True
-			timepoint = False
-		else:
-			try:	# Attempt to parse user input
-				timepoint = parser.parse(timeString).time()
-			except ValueError:	# Invalid input, try again
-				printError()
-			except TypeError:	# Invalid input, try again
-				printError()
-			else:
-				success = True	# Valid input, return timepoint
-	return timepoint
+# # Prompt for timepoint and check validity. Return valid timepoint or False to exit.
+# def enterTimepoint(channel,numPoints):
+	# success = False	# True when valid timepoint is entered
+	# while success is False:	# Loop until valid timepoint or exit command is entered
+		# time.sleep(0.5)
+		# timeString = raw_input(
+			# "Enter chamber %d timepoint %d ('exit' to finish): " % (channel+1,numPoints+1))
+		# if timeString == 'exit':	# Allow user to exit loop
+			# success = True
+			# timepoint = False
+		# else:
+			# try:	# Attempt to parse user input
+				# timepoint = parser.parse(timeString).time()
+			# except ValueError:	# Invalid input, try again
+				# printError()
+			# except TypeError:	# Invalid input, try again
+				# printError()
+			# else:
+				# success = True	# Valid input, return timepoint
+	# return timepoint
 
-# Prompt for target concentration of CO2 or O3 and check validity
-def enterTarget(timepoint,gas):
-	success = False	# True when valid target is entered
-	units = {'CO2':'ppm','O3':'ppb'}
-	prompt = 'Enter target %s concentration at %s in %s: ' % (gas,str(timepoint),units[gas])
-	while success is False:	# Loop until valid target is entered
-		try:	# Attempt to parse user input
-			target = float(raw_input(prompt))
-		except ValueError:	# Invalid input, try again
-			printError()
-		else:
-			success = True	# Valid input, return target
-	return target
+# # Prompt for target concentration of CO2 or O3 and check validity
+# def enterTarget(timepoint,gas):
+	# success = False	# True when valid target is entered
+	# units = {'CO2':'ppm','O3':'ppb'}
+	# prompt = 'Enter target %s concentration at %s in %s: ' % (gas,str(timepoint),units[gas])
+	# while success is False:	# Loop until valid target is entered
+		# try:	# Attempt to parse user input
+			# target = float(raw_input(prompt))
+		# except ValueError:	# Invalid input, try again
+			# printError()
+		# else:
+			# success = True	# Valid input, return target
+	# return target
 	
 # Collect 1-second data from IRGAs until sampleTime has elapsed,
 # then return means
@@ -181,7 +172,9 @@ def readChambers():
 	chambers = root.findall('chamber')
 	for chamberElement in chambers:
 		channel = int(chamberElement.find('channel').text)
-		chamberDict[channel] = chamber(configFile, channel)
+		newChamber = chamber(configFile, channel)
+		chamberDict[channel] = newChamber
+		newChamber.launchCO2()
 		
 # A chamber object refers to a growth chamber	
 class chamber:
@@ -195,40 +188,20 @@ class chamber:
 		self.readTimepoints()
 		self.CO2PID = PID()
 		self.O3PID = PID()
-		self.CO2conc = 0
-		self.O3conc = 0
-		self.CO2out = 0
-		self.O3out = 0
 		self.CO2enable = True
 		self.O3enable = True
 		self.parentPipe, self.childPipe = Pipe()
 		
-	# Get the current timepoint and set targets
-	def getTimepoint(self):
-		for type in self.timepoints.keys():
-			times = sorted(self.timepoints[type].keys())
-			now = datetime.datetime.now().time()
-			i = 0
+	# Get the current timepoint given process type
+	def getTimepoint(self, type):
+		times = sorted(self.timepoints[type].keys())
+		now = datetime.datetime.now().time()
+		i = 0
+		newTime = times[i]
+		while i < len(times) and now > times[i]:
 			newTime = times[i]
-			while i < len(times) and now > times[i]:
-				newTime = times[i]
-				i += 1
+			i += 1
 		return newTime
-	
-	# Set private channel and update chamberDict
-	# def setChannel(self, newChannel):
-		# self.channel = newChannel
-		# chamberDict[newChannel] = self
-	
-	# # Set private target and PID target
-	# def setCO2target(self, newTarget):
-		# self.CO2target = newTarget
-		# self.CO2PID.setTarget(newTarget)
-		
-	# # Set private target and PID target	
-	# def setO3target(self, newTarget):
-		# self.O3target = newTarget
-		# self.O3PID.setTarget(newTarget)
 
 	# Update PID algorithm, return CO2 output
 	def updateCO2PID(self, CO2conc):
@@ -236,7 +209,10 @@ class chamber:
 		if self.CO2enable:
 			self.readTimepoints()
 			self.readParams()
-			self.CO2target = self.timepoints['CO2'][self.getTimepoint()]
+			try:
+				self.CO2target = self.timepoints['CO2'][self.getTimepoint('CO2')]
+			except IndexError:
+				self.CO2target = 0
 			self.CO2PID.setParams(
 				self.CO2target, self.params['CO2']['kP'], self.params['CO2']['kI'],
 				self.params['CO2']['kD'], self.params['CO2']['outMin'], self.params['CO2']['outMax']
@@ -252,7 +228,10 @@ class chamber:
 		if self.O3enable:
 			self.readTimepoints()
 			self.readParams()
-			self.O3target = self.timepoints['O3'][self.getTimepoint()]
+			try:
+				self.O3target = self.timepoints['O3'][self.getTimepoint('O3')]
+			except IndexError:
+				self.O3target = 0
 			self.O3PID.setParams(
 				self.O3target, self.params['O3']['kP'], self.params['O3']['kI'],
 				self.params['O3']['kD'],self.params['O3']['outMin'], self.params['O3']['outMax']
@@ -261,11 +240,6 @@ class chamber:
 		else:
 			self.O3out = 0
 		return self.O3out
-	
-	# Print CO2 output
-	def printCO2(self):
-		print('Chamber %d CO2 concentration: %d CO2 output: %d' % 
-			(self.channel, self.CO2conc, self.CO2out))
 	
 	# Launch CO2valveControl as a separate process
 	def launchCO2(self):
